@@ -31,7 +31,7 @@ public class MCP400Service {
     public List<Table> getAllTablesForSchema(String schema) throws SQLException {
         List<Table> tables = new ArrayList<>();
         PreparedStatement preparedStatement = connection.prepareStatement("SELECT table_schema, table_name, table_text, LAST_ALTERED_TIMESTAMP\n" +
-                "FROM QSYS2.SYSTABLES where table_schema = ? and table_type IN ('P', 'T') ORDER BY LAST_ALTERED_TIMESTAMP DESC");
+                "FROM QSYS2.SYSTABLES where table_schema = ? and table_type IN ('P', 'T', 'V') ORDER BY LAST_ALTERED_TIMESTAMP DESC");
         preparedStatement.setString(1, schema.toUpperCase());
         preparedStatement.addBatch();
 
@@ -50,21 +50,28 @@ public class MCP400Service {
         tableName = tableName.toUpperCase();
         //Columns
         List<Column> columns = new ArrayList<>();
-        DatabaseMetaData databaseMetaData = connection.getMetaData();
-        ResultSet resultSet = databaseMetaData.getColumns(null, schema, tableName, null);
+        PreparedStatement preparedStatement = connection.prepareStatement("SELECT COLUMN_NAME, COLUMN_TEXT, DATA_TYPE\n" +
+                "FROM qsys2.SYSCOLUMNS\n" +
+                "WHERE TABLE_NAME = ? AND TABLE_SCHEMA = ?");
+        preparedStatement.setString(1, tableName);
+        preparedStatement.setString(2, schema);
+        preparedStatement.addBatch();
 
+        ResultSet resultSet = preparedStatement.executeQuery();
         while(resultSet.next()) {
-            String columnName = resultSet.getString("COLUMN_NAME");
-            String columnDatatype = resultSet.getString("TYPE_NAME");
-            String columnDescription = resultSet.getString("REMARKS");
-            boolean isAutoIncremented = resultSet.getString("IS_AUTOINCREMENT").equals("YES");
-            columns.add(new Column(columnName, columnDescription, columnDatatype, isAutoIncremented));
+            String columnName = resultSet.getString(1);
+            String columnText = resultSet.getString(2);
+            String columnDataType = resultSet.getString(3);
+
+            columns.add(new Column(columnName, columnText, columnDataType));
         }
         resultSet.close();
+        preparedStatement.close();
 
 
         //PrimaryKey
         List<String> primaryKeyColumns = new ArrayList<>();
+        DatabaseMetaData databaseMetaData = connection.getMetaData();
 
         resultSet = databaseMetaData.getPrimaryKeys(null, schema, tableName);
         while(resultSet.next()) {
