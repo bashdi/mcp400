@@ -50,74 +50,60 @@ public class MCP400Service {
         tableName = tableName.toUpperCase();
         //Columns
         List<Column> columns = new ArrayList<>();
-        PreparedStatement preparedStatement = connection.prepareStatement("SELECT COLUMN_NAME, COLUMN_TEXT, DATA_TYPE\n" +
-                "FROM qsys2.SYSCOLUMNS\n" +
-                "WHERE TABLE_NAME = ? AND TABLE_SCHEMA = ?");
-        preparedStatement.setString(1, tableName);
-        preparedStatement.setString(2, schema);
-        preparedStatement.addBatch();
+        DatabaseMetaData databaseMetaData = connection.getMetaData();
+        ResultSet resultSet = databaseMetaData.getColumns(null, schema, tableName, null);
 
-        ResultSet resultSet = preparedStatement.executeQuery();
         while(resultSet.next()) {
-            columns.add(new Column(resultSet.getString(1), resultSet.getString(2), resultSet.getString(3)));
+            String columnName = resultSet.getString("COLUMN_NAME");
+            String columnDatatype = resultSet.getString("TYPE_NAME");
+            String columnDescription = resultSet.getString("REMARKS");
+            boolean isAutoIncremented = resultSet.getString("IS_AUTOINCREMENT").equals("YES");
+            columns.add(new Column(columnName, columnDescription, columnDatatype, isAutoIncremented));
         }
         resultSet.close();
-        preparedStatement.close();
+
 
         //PrimaryKey
         List<String> primaryKeyColumns = new ArrayList<>();
-        preparedStatement = connection.prepareStatement("SELECT k.COLUMN_NAME\n" +
-                "FROM QSYS2.SYSCST c\n" +
-                "JOIN QSYS2.SYSKEYCST k\n" +
-                "  ON c.CONSTRAINT_NAME = k.CONSTRAINT_NAME\n" +
-                "WHERE c.TABLE_SCHEMA = ?\n" +
-                "  AND c.TABLE_NAME = ?\n" +
-                "  AND c.CONSTRAINT_TYPE = 'PRIMARY KEY'");
-        preparedStatement.setString(1, schema);
-        preparedStatement.setString(2, tableName);
-        preparedStatement.addBatch();
 
-        resultSet = preparedStatement.executeQuery();
+        resultSet = databaseMetaData.getPrimaryKeys(null, schema, tableName);
         while(resultSet.next()) {
-            primaryKeyColumns.add(resultSet.getString(1));
+           primaryKeyColumns.add(resultSet.getString("COLUMN_NAME"));
         }
         resultSet.close();
-        preparedStatement.close();
+
+        //ForeignKeys
+        List<ForeignKey> foreignKeysColumns = new ArrayList<>();
+        resultSet = databaseMetaData.getImportedKeys(null, schema, tableName);
+        while (resultSet.next()) {
+            foreignKeysColumns.add(new ForeignKey(resultSet.getString("PKTABLE_SCHEM"),
+                    resultSet.getString("PKTABLE_NAME"),
+                    resultSet.getString("PKCOLUMN_NAME"),
+                    resultSet.getString("FKCOLUMN_NAME")));
+        }
+        resultSet.close();
 
         //Indizes
         List<Index> indexList = new ArrayList<>();
-        preparedStatement = connection.prepareStatement("SELECT i.INDEX_NAME, i.IS_UNIQUE, k.COLUMN_NAME, k.ORDINAL_POSITION\n" +
-                "FROM QSYS2.SYSINDEXES i\n" +
-                "JOIN QSYS2.SYSKEYS k\n" +
-                "  ON i.INDEX_NAME = k.INDEX_NAME\n" +
-                "  AND i.TABLE_SCHEMA = k.INDEX_SCHEMA\n" +
-                "WHERE i.TABLE_SCHEMA = ?\n" +
-                "  AND i.TABLE_NAME = ?\n" +
-                "ORDER BY i.INDEX_NAME, k.ORDINAL_POSITION");
-        preparedStatement.setString(1, schema);
-        preparedStatement.setString(2, tableName);
-        preparedStatement.addBatch();
+        resultSet = databaseMetaData.getIndexInfo(null, schema, tableName, false, false);
 
-        resultSet = preparedStatement.executeQuery();
         String lastIndexName = null;
         Index currentIndex = null;
 
         while(resultSet.next()) {
-            String indexName = resultSet.getString(1);
-            boolean isUnique = resultSet.getString(2).equals("E");
-            String columnName = resultSet.getString(3);
+            String indexName = resultSet.getString("INDEX_NAME");
+            String columnName = resultSet.getString("COLUMN_NAME");
 
             if (currentIndex == null || !lastIndexName.equals(indexName)) {
-                currentIndex = new Index(indexName, new ArrayList<>(), isUnique);
+                currentIndex = new Index(indexName, new ArrayList<>());
                 indexList.add(currentIndex);
                 lastIndexName = indexName;
             }
             currentIndex.columnsInOrder().add(columnName);
         }
         resultSet.close();
-        preparedStatement.close();
 
-        return new TableInformation(columns, primaryKeyColumns, indexList);
+        return new TableInformation(columns, primaryKeyColumns, foreignKeysColumns, indexList);
     }
 
     @Tool(name = "mcp400_get_schemas_for_table", description = "Gets a list of schemas containing the table")
