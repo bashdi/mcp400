@@ -50,7 +50,15 @@ public class MCP400Service {
         tableName = tableName.toUpperCase();
         //Columns
         List<Column> columns = new ArrayList<>();
-        PreparedStatement preparedStatement = connection.prepareStatement("SELECT COLUMN_NAME, COLUMN_TEXT, DATA_TYPE\n" +
+        PreparedStatement preparedStatement = connection.prepareStatement("SELECT \n" +
+                "  COLUMN_NAME,\n" +
+                "  COLUMN_TEXT,\n" +
+                "  DATA_TYPE || '(' ||\n" +
+                "    COALESCE(\n" +
+                "      CAST(CHARACTER_MAXIMUM_LENGTH AS VARCHAR(20)),\n" +
+                "      CAST(NUMERIC_PRECISION AS VARCHAR(20)) || ',' || CAST(NUMERIC_SCALE AS VARCHAR(20))\n" +
+                "    )\n" +
+                "  || ')'\n" +
                 "FROM qsys2.SYSCOLUMNS\n" +
                 "WHERE TABLE_NAME = ? AND TABLE_SCHEMA = ?");
         preparedStatement.setString(1, tableName);
