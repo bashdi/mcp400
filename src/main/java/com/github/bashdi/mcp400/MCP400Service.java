@@ -1,33 +1,26 @@
 package com.github.bashdi.mcp400;
 
-import jakarta.annotation.PostConstruct;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.stereotype.Service;
-
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 
-@Service
 public class MCP400Service {
 
     private Connection connection;
 
-    @PostConstruct
-    public void init() throws Exception {
+    public MCP400Service() throws SQLException {
         String address = System.getenv("AS400_ADDRESS");
         String username = System.getenv("AS400_USER");
         String password = System.getenv("AS400_PASSWORD");
 
         if (address == null || username == null || password == null) {
-            throw new IllegalStateException("AS400_IP, AS400_USER or AS400_PASSWORD missing!");
+            throw new IllegalStateException("AS400_ADDRESS, AS400_USER or AS400_PASSWORD missing!");
         }
 
         String connectionString = "jdbc:as400:" + address + ";prompt=false;translate binary=true;naming=system";
         this.connection = DriverManager.getConnection(connectionString, username, password);
     }
 
-    @Tool(name = "mcp400_get_all_tables_for_schema", description = "Gets a list of all tables(name and description) in a specific schema on the database/as400/ibmi")
     public List<Table> getAllTablesForSchema(String schema) throws SQLException {
         List<Table> tables = new ArrayList<>();
         PreparedStatement preparedStatement = connection.prepareStatement("SELECT table_schema, table_name, table_text, LAST_ALTERED_TIMESTAMP\n" +
@@ -44,7 +37,6 @@ public class MCP400Service {
         return tables;
     }
 
-    @Tool(name = "mcp400_get_information_about_table", description = "Gets a list of all columns(name, description, datatype), index and primary key by schema and tableName")
     public TableInformation getAllColumnsForTable(String schema, String tableName) throws SQLException {
         schema = schema.toUpperCase();
         tableName = tableName.toUpperCase();
@@ -121,7 +113,6 @@ public class MCP400Service {
         return new TableInformation(columns, primaryKeyColumns, foreignKeysColumns, indexList);
     }
 
-    @Tool(name = "mcp400_get_schemas_for_table", description = "Gets a list of schemas containing the table")
     public List<Table> getSchemaForTable(String tableName) throws SQLException {
         List<Table> schemas = new ArrayList<>();
         PreparedStatement preparedStatement = connection.prepareStatement("SELECT table_schema, table_name, table_text, LAST_ALTERED_TIMESTAMP\n" +

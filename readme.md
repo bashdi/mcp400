@@ -1,6 +1,6 @@
 # mcp400 - MCP-server for AS400/DB2 for i
 
-A Spring Boot-based MCP server that delivers more context and metadata about IBM i (AS/400) databases. It currently allows querying tables(only tablenames and description), columns, primary keys, and indexes.
+A MCP server (official MCP Java SDK, stdio) that delivers more context and metadata about IBM i (AS/400) databases. It currently allows querying tables(only tablenames and description), columns, primary keys, and indexes.
 
 ## Usage in vscode with Github Copilot
 
