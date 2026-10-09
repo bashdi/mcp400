@@ -1,8 +1,0 @@
-package com.github.bashdi.mcp400;
-
-import java.util.List;
-
-public record TableInformation(List<Column> columns, List<String> primaryKeyColumns, List<ForeignKey> foreignKeyColumns, List<Index> indices) {
-
-
-}
