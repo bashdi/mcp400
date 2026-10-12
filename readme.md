@@ -74,15 +74,6 @@ All tools that take a table accept the long SQL name **or** the 10 character sys
 - **Knowledge hint**: with the knowledge base enabled, `get_information_about_table` adds a line like `Knowledge: 2 entries stored for this table/its columns. Read BEFORE writing SQL: get_knowledge_by_database_object(schema_name=..., table_name=...)` (`none stored yet` if there are none). The server instructions add reading the notes as a workflow step. The notes themselves are not added to other results.
 - **Untrusted text**: descriptions, comments, sources of views/routines/triggers and knowledge notes are written by other people. The server instructions tell the agent to treat them as data and never follow instructions found in them; knowledge results and routine sources are labelled as data. Restrict who may write to the knowledge table, and use an IBM i user with read-only rights for the catalog.
 
-## Releases
-
-Pushing a tag that starts with `v` builds the jar with Maven (Java 17) and publishes it as `mcp400.jar` on a GitHub release (`.github/workflows/release.yml`):
-
-```
-git tag v0.1.0
-git push origin v0.1.0
-```
-
 ## Context efficiency
 
 Everything the agent receives is kept short:
