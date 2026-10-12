@@ -19,8 +19,21 @@ public class MCP400Service implements Reconnectable {
     private volatile Connection connection;
     private KnowledgeService knowledge;
 
-    public MCP400Service() throws SQLException {
-        this.connection = openReadOnlyConnection();
+    /** The connection is opened on first use, so the MCP handshake works even if the IBM i is not reachable yet. */
+    public MCP400Service() {
+    }
+
+    private Connection conn() throws SQLException {
+        Connection c = connection;
+        if (c == null) {
+            synchronized (this) {
+                if (connection == null) {
+                    connection = openReadOnlyConnection();
+                }
+                c = connection;
+            }
+        }
+        return c;
     }
 
     /** Enables the "knowledge entries exist" hint in getInformationAboutTable. */
@@ -32,10 +45,11 @@ public class MCP400Service implements Reconnectable {
     @Override
     public synchronized void reconnect() throws SQLException {
         try {
-            connection.close();
+            if (connection != null) connection.close();
         } catch (Exception ignored) {
             // already dead
         }
+        connection = null;
         connection = openReadOnlyConnection();
     }
 
@@ -215,7 +229,7 @@ public class MCP400Service implements Reconnectable {
             // statistics are optional
         }
 
-        DatabaseMetaData meta = connection.getMetaData();
+        DatabaseMetaData meta = conn().getMetaData();
 
         // primary key
         List<String> pk = new ArrayList<>();
@@ -401,7 +415,7 @@ public class MCP400Service implements Reconnectable {
         if (!first.equals("SELECT") && !first.equals("WITH") && !first.equals("VALUES")) {
             return "REJECTED: only read-only SELECT / WITH / VALUES statements are supported.";
         }
-        try (PreparedStatement ps = connection.prepareStatement(s)) {
+        try (PreparedStatement ps = conn().prepareStatement(s)) {
             ResultSetMetaData md = ps.getMetaData();
             StringBuilder out = new StringBuilder("VALID (prepared only, not executed).");
             if (md != null) {
@@ -557,7 +571,7 @@ public class MCP400Service implements Reconnectable {
 
         section(out, "Tables referencing it via foreign key (child tables)", () -> {
             int n = 0;
-            try (ResultSet rs = connection.getMetaData().getExportedKeys(null, t.schema, t.name)) {
+            try (ResultSet rs = conn().getMetaData().getExportedKeys(null, t.schema, t.name)) {
                 while (rs.next()) {
                     if (++n > 50) { out.append("  ... more\n"); break; }
                     out.append("  ").append(rs.getString("FKTABLE_SCHEM")).append('.').append(rs.getString("FKTABLE_NAME"))
@@ -619,7 +633,7 @@ public class MCP400Service implements Reconnectable {
     }
 
     private List<Map<String, String>> query(String sql, int maxRows, String... params) throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+        try (PreparedStatement ps = conn().prepareStatement(sql)) {
             ps.setQueryTimeout(60);
             if (maxRows > 0) ps.setMaxRows(maxRows);
             for (int i = 0; i < params.length; i++) ps.setString(i + 1, params[i]);
