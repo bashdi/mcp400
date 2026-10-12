@@ -14,10 +14,13 @@ public class MCP400Service implements Reconnectable {
     private static final int MAX_SEARCH_TABLES = 25;
     private static final int MAX_COLUMNS_PER_SEARCH_HIT = 6;
     private static final String SYSTEM_SCHEMAS = "'QSYS','QSYS2','SYSIBM','SYSIBMADM','SYSPROC','SYSTOOLS','SYSCAT','SYSSTAT','QSYSINC','QHLPSYS','QTEMP','QMGTC','QMGTC2'";
-    private static final Pattern SQL_COMMENTS = Pattern.compile("--[^\\r\\n]*|/\\*.*?\\*/", Pattern.DOTALL);
+    private static final Pattern JOIN = Pattern.compile("\\bJOIN\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SQL_COMMENTS =Pattern.compile("--[^\\r\\n]*|/\\*.*?\\*/", Pattern.DOTALL);
 
     private volatile Connection connection;
     private KnowledgeService knowledge;
+    /** True if the previous validateSql call failed: a following success means the agent corrected something. */
+    private volatile boolean lastValidateInvalid;
 
     /** The connection is opened on first use, so the MCP handshake works even if the IBM i is not reachable yet. */
     public MCP400Service() {
@@ -310,7 +313,9 @@ public class MCP400Service implements Reconnectable {
         if (knowledge != null) {
             int entries = knowledge.countFor(t.schema, t.name);
             if (entries > 0) {
-                out.append("Knowledge: ").append(entries).append(entries == 1 ? " entry" : " entries").append(" stored for this table/its columns (mcp400_get_knowledge_by_database_object)\n");
+                out.append("Knowledge: ").append(entries).append(entries == 1 ? " entry" : " entries").append(" stored for this table/its columns (get_knowledge_by_database_object)\n");
+            } else if (entries == 0) {
+                out.append("Knowledge: none stored yet. Save verified, non-obvious facts you find out about this table or its columns (save_knowledge).\n");
             }
         }
         return out.toString();
@@ -434,11 +439,23 @@ public class MCP400Service implements Reconnectable {
             }
             int params = ps.getParameterMetaData().getParameterCount();
             if (params > 0) out.append(". Parameter markers: ").append(params);
+            if (knowledge != null) {
+                // at most one hint, the most specific first
+                if (lastValidateInvalid) {
+                    out.append("\nYou just fixed an error. If the cause was a non-obvious fact (name, type, format, code), save it (save_knowledge).");
+                } else if (JOIN.matcher(s).find()) {
+                    out.append("\nIf this join is not covered by a foreign key, save it as RELATION (save_knowledge).");
+                } else if (knowledge.savedThisSession() == 0) {
+                    out.append("\nNothing saved to the knowledge base in this session yet. Did you find out something non-obvious? Save it (save_knowledge).");
+                }
+            }
+            lastValidateInvalid = false;
             return out.toString();
         } catch (SQLException e) {
             if (isConnectionLost(e)) {
                 throw e;
             }
+            lastValidateInvalid = true;
             return "INVALID: SQLSTATE" + e.getSQLState() + ", SQLCODE " + e.getErrorCode() + ": " + clean(e.getMessage());
         }
     }
