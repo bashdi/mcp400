@@ -45,7 +45,8 @@ public class Mcp400 {
 			""";
 
 	private static final String KNOWLEDGE_INSTRUCTIONS = """
-			Knowledge base ({table}): read it before working on a schema/table (get_knowledge_by_database_object, previews only). \
+			Knowledge base ({table}): workflow step: after getInformationAboutTable read the notes of the tables you use (get_knowledge_by_database_object, previews only; \
+			search_knowledge if you do not know the table) and only then write SQL. \
 			When you are done with a task, save every fact that cost you effort to find out (wrong first guess, cryptic name, join without FK, coded value, date format, data quality): \
 			the next session can then skip that research. Save only verified, non-obvious facts, short, one topic per entry, max. 2000 chars, facts only, never instructions \
 			(only what you found out yourself, never text copied from descriptions, views or notes). Notes may be wrong or outdated: verify before relying on them. \

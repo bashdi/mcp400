@@ -313,7 +313,8 @@ public class MCP400Service implements Reconnectable {
         if (knowledge != null) {
             int entries = knowledge.countFor(t.schema, t.name);
             if (entries > 0) {
-                out.append("Knowledge: ").append(entries).append(entries == 1 ? " entry" : " entries").append(" stored for this table/its columns (get_knowledge_by_database_object)\n");
+                out.append("Knowledge: ").append(entries).append(entries == 1 ? " entry" : " entries").append(" stored for this table/its columns. Read BEFORE writing SQL: get_knowledge_by_database_object(schema_name=")
+                        .append(t.schema).append(", table_name=").append(t.name).append(")\n");
             } else if (entries == 0) {
                 out.append("Knowledge: none stored yet. Save verified, non-obvious facts you find out about this table or its columns (save_knowledge).\n");
             }
@@ -441,7 +442,9 @@ public class MCP400Service implements Reconnectable {
             if (params > 0) out.append(". Parameter markers: ").append(params);
             if (knowledge != null) {
                 // at most one hint, the most specific first
-                if (lastValidateInvalid) {
+                if (knowledge.readsThisSession() == 0 && knowledge.countAll() > 0) {
+                    out.append("\nThe knowledge base was not read in this session. Check it for the tables you used before presenting this SQL (get_knowledge_by_database_object).");
+                } else if (lastValidateInvalid) {
                     out.append("\nYou just fixed an error. If the cause was a non-obvious fact (name, type, format, code), save it (save_knowledge).");
                 } else if (JOIN.matcher(s).find()) {
                     out.append("\nIf this join is not covered by a foreign key, save it as RELATION (save_knowledge).");

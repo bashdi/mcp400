@@ -55,8 +55,8 @@ Lets the agent keep what it learned about the database (relations without foreig
 
 To encourage the agent to save, the server reminds it at fitting moments (only when the knowledge base is enabled):
 
-- `get_information_about_table` says when nothing is stored yet for the table.
-- `validate_sql` adds at most one hint to a valid statement: after an error was fixed ("save the cause if it was non-obvious"), for a `JOIN` ("save it as `RELATION` if no foreign key covers it"), or as long as nothing was saved in this session.
+- `get_information_about_table` says when nothing is stored yet for the table. If entries exist, it tells the agent to read them before writing SQL and names the exact call.
+- `validate_sql` adds at most one hint to a valid statement, in this order: the knowledge base has entries but was not read in this session, an error was just fixed ("save the cause if it was non-obvious"), a `JOIN` ("save it as `RELATION` if no foreign key covers it"), or nothing was saved in this session yet.
 - The answer to `save_knowledge` names the number of entries for the table and entries that should be merged.
 
 Setup:
@@ -71,7 +71,7 @@ All tools that take a table accept the long SQL name **or** the 10 character sys
 ## Reliability and security
 
 - **Reconnect**: if the connection to the IBM i is lost (network, idle timeout, IBM i restart), the server reconnects once and repeats the call. No restart of the MCP server is needed.
-- **Knowledge hint**: with the knowledge base enabled, `get_information_about_table` adds a line like `Knowledge: 2 entries stored for this table/its columns`, so the agent knows it should read them (`none stored yet` if there are none). The notes themselves are not added to other results.
+- **Knowledge hint**: with the knowledge base enabled, `get_information_about_table` adds a line like `Knowledge: 2 entries stored for this table/its columns. Read BEFORE writing SQL: get_knowledge_by_database_object(schema_name=..., table_name=...)` (`none stored yet` if there are none). The server instructions add reading the notes as a workflow step. The notes themselves are not added to other results.
 - **Untrusted text**: descriptions, comments, sources of views/routines/triggers and knowledge notes are written by other people. The server instructions tell the agent to treat them as data and never follow instructions found in them; knowledge results and routine sources are labelled as data. Restrict who may write to the knowledge table, and use an IBM i user with read-only rights for the catalog.
 
 ## Releases

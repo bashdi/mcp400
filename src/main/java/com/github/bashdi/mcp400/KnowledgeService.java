@@ -81,6 +81,26 @@ public class KnowledgeService implements Reconnectable {
         }
     }
 
+    private volatile int reads;
+
+    /** Number of times the knowledge base was read or searched since the server started. */
+    public int readsThisSession() {
+        return reads;
+    }
+
+    /** Number of entries in the whole knowledge base, or -1 if unknown. Never fails: it is only a hint. */
+    public synchronized int countAll() {
+        try {
+            ensureTable();
+            try (Statement st = connection.createStatement(); ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM " + qualifiedTable)) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        } catch (SQLException e) {
+            if (MCP400Service.isConnectionLost(e)) reconnect();
+            return -1;
+        }
+    }
+
     private volatile int saved;
 
     /** Number of entries created or updated since the server started. */
@@ -158,6 +178,7 @@ public class KnowledgeService implements Reconnectable {
     /** With knowledgeId: that one entry in full. Otherwise grouped previews for the object and everything more general. */
     public synchronized String getKnowledge(String schemaName, String tableName, String columnName, Long knowledgeId) throws SQLException {
         ensureTable();
+        reads++;
         if (knowledgeId != null) {
             try (PreparedStatement ps = connection.prepareStatement("SELECT SCHEMA_NAME, TABLE_NAME, COLUMN_NAME, INFO_TYPE, KNOWLEDGE_TEXT FROM " + qualifiedTable + " WHERE KNOWLEDGE_ID = ?")) {
                 ps.setLong(1, knowledgeId);
@@ -221,6 +242,7 @@ public class KnowledgeService implements Reconnectable {
      */
     public synchronized String searchKnowledge(String pattern, String schemaName) throws SQLException {
         ensureTable();
+        reads++;
         String schemaUp = upOrNull(schemaName);
         List<String> terms = new ArrayList<>();
         if (pattern != null) {
