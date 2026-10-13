@@ -1,4 +1,7 @@
-package com.github.bashdi.mcp400;
+package com.github.bashdi.mcp400.db;
+
+import com.github.bashdi.mcp400.core.As400Connection;
+import com.github.bashdi.mcp400.core.Reconnectable;
 
 import java.sql.*;
 import java.util.ArrayList;
@@ -76,7 +79,7 @@ public class KnowledgeService implements Reconnectable {
                 }
             }
         } catch (SQLException e) {
-            if (MCP400Service.isConnectionLost(e)) reconnect();
+            if (As400Connection.isConnectionLost(e)) reconnect();
             return -1;
         }
     }
@@ -96,7 +99,7 @@ public class KnowledgeService implements Reconnectable {
                 return rs.next() ? rs.getInt(1) : 0;
             }
         } catch (SQLException e) {
-            if (MCP400Service.isConnectionLost(e)) reconnect();
+            if (As400Connection.isConnectionLost(e)) reconnect();
             return -1;
         }
     }
@@ -395,7 +398,7 @@ public class KnowledgeService implements Reconnectable {
     /** Opens the writable connection and creates the table (and lookup index) on first use. */
     private void ensureTable() throws SQLException {
         if (connection == null || connection.isClosed()) {
-            connection = MCP400Service.openConnection();
+            connection = As400Connection.openConnection();
         }
         if (tableReady) return;
         boolean exists;

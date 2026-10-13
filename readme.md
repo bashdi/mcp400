@@ -1,10 +1,33 @@
-# mcp400 - MCP-server for AS400/DB2 for i
+# mcp400 - MCP-servers for AS400/DB2 for i
 
-An MCP server (official MCP Java SDK, stdio) that gives AI agents context about **Db2 for i** (IBM i / AS400) databases so they can find the right tables and write correct, well-performing SQL.
+MCP servers (official MCP Java SDK, stdio) that give AI agents context about **Db2 for i** (IBM i / AS400) so they can find the right tables and write correct, well-performing SQL.
 
-**It only reads the system catalog (`QSYS2`), never table data.** The connection is opened read-only. All results are returned as compact plain text (no JSON) to save context: optional values are omitted, long lists are capped, long sources are truncated.
+**The database part only reads the system catalog (`QSYS2`), never table data.** The connection is opened read-only. All results are returned as compact plain text (no JSON) to save context: optional values are omitted, long lists are capped, long sources are truncated.
+
+## Servers
+
+The project builds three servers. Each one is a fat jar with its own entry point:
+
+| Jar | Capabilities | Entry point |
+|---|---|---|
+| `mcp400.jar` | all (database and programming) | `com.github.bashdi.mcp400.Mcp400` |
+| `mcp400-db.jar` | database only: catalog tools, SQL check, knowledge base | `com.github.bashdi.mcp400.db.Mcp400Db` |
+| `mcp400-pgm.jar` | programming only (placeholder, no tools yet) | `com.github.bashdi.mcp400.pgm.Mcp400Pgm` |
+
+Modules:
+
+| Module | Content |
+|---|---|
+| `mcp400-core` | Shared code: IBM i connection and reconnect, tool builder, server start. Not released on its own. |
+| `mcp400-db` | Database capability (the tools below) |
+| `mcp400-pgm` | Programming capability (empty for now) |
+| `mcp400` | Aggregates `mcp400-db` and `mcp400-pgm` into `mcp400.jar` |
+
+Build all jars with `mvn package`. Every version tag (`v*`) builds the three jars and attaches them to the GitHub release.
 
 ## Tools
+
+The tools below are provided by `mcp400.jar` and `mcp400-db.jar`.
 
 ### Finding tables (also when names are cryptic)
 
@@ -102,7 +125,7 @@ The server sends instructions to the agent and marks the following in its output
 
 ## Usage in vscode with Github Copilot
 
-1. Download `mcp400.jar` from the latest [GitHub release](../../releases/latest)
+1. Download `mcp400.jar` (all capabilities) or `mcp400-db.jar` (database only) from the latest [GitHub release](../../releases/latest)
 2. Follow the instructions: https://code.visualstudio.com/docs/copilot/chat/mcp-servers
 
 
@@ -134,12 +157,12 @@ AS400_ADDRESS, AS400_USER and AS400_PASSWORD.
         }
     ],
     "servers": {
-        "mcp400": {
+        "mcp400-db": {
             "type": "stdio",
             "command": "java",
             "args": [
                 "-jar",
-                "C:\\Users\\bashdi\\Downloads\\mcp400.jar"
+                "C:\\Users\\bashdi\\Downloads\\mcp400-db.jar"
             ],
             "env": {
                 "AS400_ADDRESS": "${input:AS400_ADDRESS}",
@@ -151,4 +174,5 @@ AS400_ADDRESS, AS400_USER and AS400_PASSWORD.
     }
 }
 ```
-On mcp-server-start, VSCode will ask you for your credentials and save them securely
+On mcp-server-start, VSCode will ask you for your credentials and save them securely.
+To use all capabilities, use `mcp400.jar` instead; the server name in the config is free to choose.

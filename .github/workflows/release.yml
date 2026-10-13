@@ -1,6 +1,6 @@
 name: Release
 
-# Builds mcp400.jar and attaches it to a GitHub release when a version tag is pushed, e.g.:
+# Builds mcp400.jar, mcp400-db.jar and mcp400-pgm.jar and attaches them to a GitHub release when a version tag is pushed, e.g.:
 #   git tag v0.1.0 && git push origin v0.1.0
 on:
   push:
@@ -28,4 +28,9 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" target/mcp400.jar --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            mcp400/target/mcp400.jar \
+            mcp400-db/target/mcp400-db.jar \
+            mcp400-pgm/target/mcp400-pgm.jar \
+            --title "$GITHUB_REF_NAME" --generate-notes

@@ -1,32 +1,24 @@
-package com.github.bashdi.mcp400;
+package com.github.bashdi.mcp400.db;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import io.modelcontextprotocol.server.McpServer;
+import com.github.bashdi.mcp400.core.As400Connection;
+import com.github.bashdi.mcp400.core.Capability;
+import com.github.bashdi.mcp400.core.McpTools.Param;
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
-import io.modelcontextprotocol.server.transport.StdioServerTransportProvider;
-import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
-import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities;
-import io.modelcontextprotocol.spec.McpSchema.TextContent;
-import io.modelcontextprotocol.spec.McpSchema.Tool;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.TreeSet;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
+
+import static com.github.bashdi.mcp400.core.McpTools.lng;
+import static com.github.bashdi.mcp400.core.McpTools.str;
+import static com.github.bashdi.mcp400.core.McpTools.tool;
 
 /**
- * Everything the agent receives (instructions, tool descriptions, results) is kept short on purpose:
+ * Database capability: catalog metadata of Db2 for i and the optional knowledge base.
+ * Everything the agent receives is kept short on purpose:
  * explanations that apply to all tools are in INSTRUCTIONS once, not repeated in every description or result.
  */
-public class Mcp400 {
-
-	private static final ObjectMapper MAPPER = new ObjectMapper();
-
-	/** Services whose connection is replaced when the link to the IBM i was lost. */
-	private static final List<Reconnectable> RECONNECTABLES = new CopyOnWriteArrayList<>();
+public final class DbCapability implements Capability {
 
 	private static final String INSTRUCTIONS = """
 			Db2 for i (IBM i/AS400) catalog metadata. Never reads table data. Results are compact text.
@@ -53,98 +45,105 @@ public class Mcp400 {
 			Update/merge (knowledge_id) instead of duplicating, delete wrong entries.
 			""";
 
-	public static void main(String[] args) throws Exception {
-		MCP400Service s = new MCP400Service();
-		RECONNECTABLES.add(s);
+	private final MCP400Service service = new MCP400Service();
+	/** Null unless AS400_KNOWLEDGE=true. */
+	private final KnowledgeService knowledge;
 
+	public DbCapability() {
+		As400Connection.register(service);
+		if ("true".equalsIgnoreCase(System.getenv("AS400_KNOWLEDGE"))) {
+			knowledge = new KnowledgeService(System.getenv("AS400_USER"), System.getenv("AS400_KNOWLEDGE_TABLE"));
+			As400Connection.register(knowledge);
+			service.setKnowledge(knowledge);
+		} else {
+			knowledge = null;
+		}
+	}
+
+	@Override
+	public String instructions() {
+		return knowledge == null ? INSTRUCTIONS : INSTRUCTIONS + KNOWLEDGE_INSTRUCTIONS.replace("{table}", knowledge.tableName());
+	}
+
+	@Override
+	public List<SyncToolSpecification> tools() {
+		List<SyncToolSpecification> tools = new ArrayList<>(catalogTools());
+		if (knowledge != null) {
+			tools.addAll(knowledgeTools(knowledge));
+		}
+		return tools;
+	}
+
+	private List<SyncToolSpecification> catalogTools() {
 		Param schema = new Param("schema", "Schema (library)", true);
 		Param table = new Param("table", "Table/view/file, SQL or system name", true);
 		Param optSchema = new Param("schema", "Optional: only this schema", false);
 
-		List<SyncToolSpecification> tools = new ArrayList<>(List.of(
+		return List.of(
 				tool("search_columns",
 						"Finds tables by column name, system name, description or heading (start here when table names are cryptic). Tables ranked by matching columns.",
 						List.of(new Param("pattern", "Terms separated by spaces (OR), substring, % wildcard", true), optSchema),
-						a -> s.searchColumns(str(a, "pattern"), str(a, "schema"))),
+						a -> service.searchColumns(str(a, "pattern"), str(a, "schema"))),
 				tool("search_tables",
 						"Finds tables/views by name, system name or description.",
 						List.of(new Param("pattern", "Terms separated by spaces (OR), substring, % wildcard", true), optSchema),
-						a -> s.searchTables(str(a, "pattern"), str(a, "schema"))),
+						a -> service.searchTables(str(a, "pattern"), str(a, "schema"))),
 				tool("get_all_tables_for_schema",
 						"Lists the tables/views of a schema (max. 300). Source files never, logical files only with includeLogicals.",
 						List.of(schema, new Param("filter", "Optional: substring of name/description", false),
 								new Param("includeLogicals", "Optional: 'true' to include logical files", false)),
-						a -> s.getAllTablesForSchema(str(a, "schema"), str(a, "filter"), "true".equalsIgnoreCase(str(a, "includeLogicals")))),
+						a -> service.getAllTablesForSchema(str(a, "schema"), str(a, "filter"), "true".equalsIgnoreCase(str(a, "includeLogicals")))),
 				tool("get_schemas_for_table",
 						"Schemas containing an object with this name, newest first.",
 						List.of(new Param("table", "Table/view name, SQL or system name", true)),
-						a -> s.getSchemaForTable(str(a, "table"))),
+						a -> service.getSchemaForTable(str(a, "table"))),
 				tool("get_all_columns_for_table",
 						"Columns with type, nullability, default and description.",
 						List.of(schema, table),
-						a -> s.getAllColumnsForTable(str(a, "schema"), str(a, "table"))),
+						a -> service.getAllColumnsForTable(str(a, "schema"), str(a, "table"))),
 				tool("get_information_about_table",
 						"Type, description, approx. row count, primary/foreign keys, constraints, indexes with key order (no columns).",
 						List.of(schema, table),
-						a -> s.getInformationAboutTable(str(a, "schema"), str(a, "table"))),
+						a -> service.getInformationAboutTable(str(a, "schema"), str(a, "table"))),
 				tool("get_systemnames_for_table",
 						"10 char system names of the table and of columns whose SQL name differs (for CL/RPG/DDS).",
 						List.of(schema, table),
-						a -> s.getSystemnamesForTable(str(a, "schema"), str(a, "table"))),
+						a -> service.getSystemnamesForTable(str(a, "schema"), str(a, "table"))),
 				tool("get_dependent_objects",
 						"Views/logical files over the table, child tables (FK), aliases, triggers.",
 						List.of(schema, table),
-						a -> s.getDependentObjects(str(a, "schema"), str(a, "table"))),
+						a -> service.getDependentObjects(str(a, "schema"), str(a, "table"))),
 				tool("get_view_definition",
 						"SQL source of a view.",
 						List.of(schema, new Param("view", "View name, SQL or system name", true)),
-						a -> s.getViewDefinition(str(a, "schema"), str(a, "view"))),
+						a -> service.getViewDefinition(str(a, "schema"), str(a, "view"))),
 				tool("validate_sql",
 						"Prepares one SELECT/WITH/VALUES without executing it: error (SQLSTATE/SQLCODE, message) or result columns. Use before presenting SQL.",
 						List.of(new Param("sql", "One SELECT statement", true)),
-						a -> s.validateSql(str(a, "sql"))),
+						a -> service.validateSql(str(a, "sql"))),
 				tool("get_index_advice",
 						"Indexes the optimizer recommended for the table, most requested first.",
 						List.of(schema, table),
-						a -> s.getIndexAdvice(str(a, "schema"), str(a, "table"))),
+						a -> service.getIndexAdvice(str(a, "schema"), str(a, "table"))),
 				tool("get_triggers_for_table",
 						"Triggers on a table with source.",
 						List.of(schema, table),
-						a -> s.getTriggersForTable(str(a, "schema"), str(a, "table"))),
+						a -> service.getTriggersForTable(str(a, "schema"), str(a, "table"))),
 				tool("get_triggers_for_schema",
 						"One line per trigger in a schema, no source.",
 						List.of(schema),
-						a -> s.getTriggersForSchema(str(a, "schema"))),
+						a -> service.getTriggersForSchema(str(a, "schema"))),
 				tool("get_routines_for_schema",
 						"Stored procedures and functions of a schema.",
 						List.of(schema),
-						a -> s.getRoutinesForSchema(str(a, "schema"))),
+						a -> service.getRoutinesForSchema(str(a, "schema"))),
 				tool("get_routine_info",
 						"Parameters, comment and source of a stored procedure/function.",
 						List.of(schema, new Param("name", "Routine or specific name", true)),
-						a -> s.getRoutineInfo(str(a, "schema"), str(a, "name")))));
-
-		String instructions = INSTRUCTIONS;
-		if ("true".equalsIgnoreCase(System.getenv("AS400_KNOWLEDGE"))) {
-			KnowledgeService knowledge = new KnowledgeService(System.getenv("AS400_USER"), System.getenv("AS400_KNOWLEDGE_TABLE"));
-			RECONNECTABLES.add(knowledge);
-			s.setKnowledge(knowledge);
-			tools.addAll(knowledgeTools(knowledge));
-			instructions += KNOWLEDGE_INSTRUCTIONS.replace("{table}", knowledge.tableName());
-		}
-
-		McpServer.sync(new StdioServerTransportProvider(MAPPER))
-				.serverInfo("mcp400", "0.0.1")
-				.instructions(instructions)
-				.capabilities(ServerCapabilities.builder().tools(true).build())
-				.tools(tools)
-				.build();
-
-		// stdio transport runs on its own threads; keep the process alive
-		new CountDownLatch(1).await();
+						a -> service.getRoutineInfo(str(a, "schema"), str(a, "name"))));
 	}
 
-	private static List<SyncToolSpecification> knowledgeTools(KnowledgeService k) {
+	private List<SyncToolSpecification> knowledgeTools(KnowledgeService k) {
 		return List.of(
 				tool("save_knowledge",
 						"Call this proactively whenever you found out something non-obvious: a first guess was wrong, a name was cryptic, tables join without FK, a column holds codes or a special date format. Saves verified knowledge about a schema/table/column, or overwrites the entry knowledge_id. Omit table/column for broader knowledge.",
@@ -180,70 +179,5 @@ public class Mcp400 {
 						"Deletes a knowledge entry.",
 						List.of(new Param("knowledge_id", "Entry id", true, "integer", null)),
 						a -> k.deleteKnowledge(lng(a, "knowledge_id"))));
-	}
-
-	private record Param(String name, String description, boolean required, String type, List<String> allowed) {
-		Param(String name, String description, boolean required) {
-			this(name, description, required, "string", null);
-		}
-	}
-
-	private interface ToolHandler {
-		String call(Map<String, Object> arguments) throws Exception;
-	}
-
-	private static String str(Map<String, Object> arguments, String key) {
-		Object value = arguments.get(key);
-		return value == null ? null : value.toString();
-	}
-
-	private static Long lng(Map<String, Object> arguments, String key) {
-		Object value = arguments.get(key);
-		if (value == null) return null;
-		if (value instanceof Number n) return n.longValue();
-		return Long.parseLong(value.toString().trim());
-	}
-
-	/** Runs the tool; if the connection to the IBM i is gone, reconnects once and retries. */
-	private static String callWithReconnect(ToolHandler handler, Map<String, Object> arguments) throws Exception {
-		try {
-			return handler.call(arguments);
-		} catch (Exception e) {
-			if (!MCP400Service.isConnectionLost(e)) throw e;
-			for (Reconnectable r : RECONNECTABLES) {
-				try {
-					r.reconnect();
-				} catch (Exception reconnectFailed) {
-					throw new IllegalStateException("Connection to the IBM i lost and reconnect failed: " + reconnectFailed.getMessage(), reconnectFailed);
-				}
-			}
-			return handler.call(arguments);
-		}
-	}
-
-	private static SyncToolSpecification tool(String name, String description, List<Param> params, ToolHandler handler) {
-		ObjectNode schema = MAPPER.createObjectNode().put("type", "object");
-		ObjectNode properties = schema.putObject("properties");
-		var required = schema.putArray("required");
-		for (Param p : params) {
-			ObjectNode prop = properties.putObject(p.name()).put("type", p.type()).put("description", p.description());
-			if (p.allowed() != null) {
-				var values = prop.putArray("enum");
-				p.allowed().forEach(values::add);
-			}
-			if (p.required()) required.add(p.name());
-		}
-		return new SyncToolSpecification(new Tool(name, description, schema.toString()), (exchange, arguments) -> {
-			try {
-				for (Param p : params) {
-					if (p.required() && (arguments.get(p.name()) == null || arguments.get(p.name()).toString().isBlank())) {
-						throw new IllegalArgumentException("Missing argument: " + p.name());
-					}
-				}
-				return new CallToolResult(List.of(new TextContent(callWithReconnect(handler, arguments))), false);
-			} catch (Exception e) {
-				return new CallToolResult(List.of(new TextContent("Error: " + e.getMessage())), true);
-			}
-		});
 	}
 }

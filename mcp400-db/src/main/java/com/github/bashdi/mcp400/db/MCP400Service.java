@@ -1,4 +1,7 @@
-package com.github.bashdi.mcp400;
+package com.github.bashdi.mcp400.db;
+
+import com.github.bashdi.mcp400.core.As400Connection;
+import com.github.bashdi.mcp400.core.Reconnectable;
 
 import java.sql.*;
 import java.util.*;
@@ -57,38 +60,9 @@ public class MCP400Service implements Reconnectable {
     }
 
     private static Connection openReadOnlyConnection() throws SQLException {
-        Connection c = openConnection();
+        Connection c = As400Connection.openConnection();
         c.setReadOnly(true);
         return c;
-    }
-
-    /** True if the exception (or a cause) says that the connection to the IBM i is gone. */
-    static boolean isConnectionLost(Throwable e) {
-        for (Throwable t = e; t != null; t = t.getCause()) {
-            if (t instanceof SQLException sql) {
-                String state = sql.getSQLState();
-                String message = sql.getMessage() == null ? "" : sql.getMessage().toLowerCase();
-                if ((state != null && state.startsWith("08")) || message.contains("communication link failure")
-                        || message.contains("connection does not exist") || message.contains("connection is closed")) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    /** Opens a connection from the AS400_ADDRESS, AS400_USER and AS400_PASSWORD environment variables. */
-    static Connection openConnection() throws SQLException {
-        String address = System.getenv("AS400_ADDRESS");
-        String username = System.getenv("AS400_USER");
-        String password = System.getenv("AS400_PASSWORD");
-
-        if (address == null || username == null || password == null) {
-            throw new IllegalStateException("AS400_ADDRESS, AS400_USER or AS400_PASSWORD missing!");
-        }
-
-        String connectionString = "jdbc:as400:" + address + ";prompt=false;translate binary=true;naming=system";
-        return DriverManager.getConnection(connectionString, username, password);
     }
 
     // ------------------------------------------------------------------ tables
@@ -455,7 +429,7 @@ public class MCP400Service implements Reconnectable {
             lastValidateInvalid = false;
             return out.toString();
         } catch (SQLException e) {
-            if (isConnectionLost(e)) {
+            if (As400Connection.isConnectionLost(e)) {
                 throw e;
             }
             lastValidateInvalid = true;

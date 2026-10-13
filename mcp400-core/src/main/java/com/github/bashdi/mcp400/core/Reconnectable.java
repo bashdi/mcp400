@@ -1,4 +1,4 @@
-package com.github.bashdi.mcp400;
+package com.github.bashdi.mcp400.core;
 
 import java.sql.SQLException;
 
