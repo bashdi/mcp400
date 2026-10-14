@@ -535,7 +535,7 @@ public final class CompileService {
     }
 
     /** Runs a CL command; a failure names the command, so the cause is visible in the error. */
-    private static void runCommand(Connection c, String command) throws SQLException {
+    static void runCommand(Connection c, String command) throws SQLException {
         try (CallableStatement cs = c.prepareCall("CALL QSYS2.QCMDEXC(?, ?)")) {
             cs.setString(1, command);
             cs.setBigDecimal(2, BigDecimal.valueOf(command.length()));

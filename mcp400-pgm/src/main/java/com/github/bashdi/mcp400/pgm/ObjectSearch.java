@@ -68,6 +68,38 @@ public final class ObjectSearch {
         return String.join("\n", out);
     }
 
+    /** Description of the object(s) with exactly this name: type, attribute, owner and text. */
+    public static String describe(String library, String name, String objectType) throws SQLException {
+        String lib = IbmiSource.validName(library, "library");
+        String object = IbmiSource.validName(name, "name");
+        String type = upper(objectType).isEmpty() ? "*ALL" : upper(objectType);
+        if (!OBJECT_TYPES.contains(type)) {
+            throw new IllegalArgumentException("object_type '" + type + "' nicht unterstützt");
+        }
+        List<String> out = new ArrayList<>();
+        try (Connection c = As400Connection.openConnection()) {
+            c.setReadOnly(true);
+            try (PreparedStatement ps = c.prepareStatement("SELECT OBJNAME, OBJTYPE, OBJATTRIBUTE, OBJTEXT, OBJOWNER FROM TABLE(QSYS2.OBJECT_STATISTICS(?, ?)) X WHERE OBJNAME = ?")) {
+                ps.setString(1, lib);
+                ps.setString(2, type);
+                ps.setString(3, object);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        String text = rs.getString(4) == null ? "" : rs.getString(4).replaceAll("\\s+", " ").trim();
+                        out.add(lib + "/" + rs.getString(1).trim() + " " + rs.getString(2).trim()
+                                + (rs.getString(3) == null || rs.getString(3).isBlank() ? "" : " " + rs.getString(3).trim())
+                                + " owner: " + (rs.getString(5) == null ? "-" : rs.getString(5).trim()));
+                        if (!text.isEmpty()) out.add("  text: " + text);
+                    }
+                }
+            }
+        }
+        if (out.isEmpty()) {
+            return "object " + lib + "/" + object + " not found" + (type.equals("*ALL") ? "" : " as " + type);
+        }
+        return String.join("\n", out);
+    }
+
     private static String line(String name, String type, String attribute, String text) {
         String description = text == null ? "" : text.replaceAll("\\s+", " ").trim();
         if (description.length() > MAX_TEXT_CHARS) {

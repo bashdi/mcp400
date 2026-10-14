@@ -31,13 +31,13 @@ public final class BindingSearch {
         List<String> lines = new ArrayList<>();
         try (Connection c = As400Connection.openConnection()) {
             c.setReadOnly(true);
-            try (PreparedStatement ps = c.prepareStatement("SELECT OBJECT_LIBRARY, OBJECT_NAME FROM QSYS2.BINDING_DIRECTORY_INFO " +
-                    "WHERE BINDING_DIRECTORY_LIBRARY = ? AND BINDING_DIRECTORY_NAME = ? ORDER BY OBJECT_NAME FETCH FIRST " + (MAX_ROWS + 1) + " ROWS ONLY")) {
+            try (PreparedStatement ps = c.prepareStatement("SELECT ENTRY_LIBRARY, ENTRY, ENTRY_TYPE FROM QSYS2.BINDING_DIRECTORY_INFO " +
+                    "WHERE BINDING_DIRECTORY_LIBRARY = ? AND BINDING_DIRECTORY = ? ORDER BY ENTRY FETCH FIRST " + (MAX_ROWS + 1) + " ROWS ONLY")) {
                 ps.setString(1, lib);
                 ps.setString(2, dir);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
-                        lines.add(rs.getString(1).trim() + "/" + rs.getString(2).trim());
+                        lines.add(rs.getString(1).trim() + "/" + rs.getString(2).trim() + " " + rs.getString(3).trim());
                     }
                 }
             }
@@ -72,10 +72,10 @@ public final class BindingSearch {
         }
 
         StringBuilder sql = new StringBuilder("SELECT PROGRAM_LIBRARY, PROGRAM_NAME, SYMBOL_NAME FROM QSYS2.PROGRAM_EXPORT_IMPORT_INFO " +
-                "WHERE OBJECT_TYPE = '*SRVPGM' AND SYMBOL_NAME LIKE ?");
+                "WHERE OBJECT_TYPE = '*SRVPGM' AND SYMBOL_USAGE LIKE '%EXP%' AND SYMBOL_NAME LIKE ?");
         if (dir != null) {
-            sql.append(" AND PROGRAM_NAME IN (SELECT OBJECT_NAME FROM QSYS2.BINDING_DIRECTORY_INFO " +
-                    "WHERE BINDING_DIRECTORY_LIBRARY = ? AND BINDING_DIRECTORY_NAME = ?)");
+            sql.append(" AND PROGRAM_NAME IN (SELECT ENTRY FROM QSYS2.BINDING_DIRECTORY_INFO " +
+                    "WHERE BINDING_DIRECTORY_LIBRARY = ? AND BINDING_DIRECTORY = ?)");
         }
         sql.append(" ORDER BY SYMBOL_NAME FETCH FIRST ").append(MAX_ROWS + 1).append(" ROWS ONLY");
 

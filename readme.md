@@ -51,7 +51,12 @@ Compiles a local source on the IBM i without running it. Results are plain text 
 | `get_binding_directory_entries(library, directory)` | Entries (service programs, modules) of a binding directory. |
 | `search_procedures(pattern, [library], [binding_directory])` | Exported procedures of service programs by name (`*` wildcard, case sensitive). With `library` and `binding_directory`, only service programs bound by that directory are searched. |
 
-The catalog views behind the binding tools (`QSYS2.BINDING_DIRECTORY_INFO`, `QSYS2.PROGRAM_EXPORT_IMPORT_INFO`) are not verified on every IBM i release. If a call fails with an SQL error, the column names do not match the release.
+| `search_source_on_ibmi(library, file, text, [member])` | Case-insensitive text search in the members of a source file (e.g. `QRPGLESRC`). One line per hit: `member:line text`. Max. 100 hits, 500 members. Read-only. |
+| `list_source_members(library, file)` | Members of a source physical file. |
+| `get_object_description(library, name, [object_type])` | Type, attribute, owner and text of an object. |
+| `find_references(library, name)` | Programs and service programs of the library that use the object, from `DSPPGMREF` (the references stored in the program). Runs `DSPPGMREF` for up to 100 programs and writes to the outfile `QTEMP/MCPREF`, which is removed afterwards. Programs without authority are listed as not checked. |
+
+The source tools read the members through the record interface of jt400 in a job of their own, so no temporary objects are created. The catalog views behind the binding tools (`QSYS2.BINDING_DIRECTORY_INFO`, `QSYS2.PROGRAM_EXPORT_IMPORT_INFO`) are not verified on every IBM i release. If a call fails with an SQL error, the column names do not match the release.
 
 ## Tools
 
