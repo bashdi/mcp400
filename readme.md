@@ -12,7 +12,7 @@ The project builds three servers. Each one is a fat jar with its own entry point
 |---|---|---|
 | `mcp400.jar` | all (database and programming) | `com.github.bashdi.mcp400.Mcp400` |
 | `mcp400-db.jar` | database only: catalog tools, SQL check, knowledge base | `com.github.bashdi.mcp400.db.Mcp400Db` |
-| `mcp400-pgm.jar` | programming only (placeholder, no tools yet) | `com.github.bashdi.mcp400.pgm.Mcp400Pgm` |
+| `mcp400-pgm.jar` | programming only: compile a local source on the IBM i | `com.github.bashdi.mcp400.pgm.Mcp400Pgm` |
 
 Modules:
 
@@ -20,10 +20,38 @@ Modules:
 |---|---|
 | `mcp400-core` | Shared code: IBM i connection and reconnect, tool builder, server start. Not released on its own. |
 | `mcp400-db` | Database capability (the tools below) |
-| `mcp400-pgm` | Programming capability (empty for now) |
+| `mcp400-pgm` | Programming capability: compile tools (below) |
 | `mcp400` | Aggregates `mcp400-db` and `mcp400-pgm` into `mcp400.jar` |
 
 Build all jars with `mvn package`. Every version tag (`v*`) builds the three jars and attaches them to the GitHub release.
+
+## Compile tools (`mcp400.jar`, `mcp400-pgm.jar`)
+
+Compiles a local source on the IBM i without running it. Results are plain text lines.
+
+| Tool | Description |
+|---|---|
+| `prepare_compile(source_path, [source_type], [compiler_options])` | Checks the local file and copies it unchanged into a temporary member in the source file `QTEMP/TMPSRC`. Returns a `compile_id`. |
+| `compile_check(compile_id)` | Compiles the prepared member (`CRTRPGMOD`, `CRTSQLRPGI`, `CRTCLMOD`), reads the joblog and the listing (`QSYSPRT`), reports errors and warnings with line numbers, and removes the temporary objects. Status: `success`, `success_with_warnings`, `failed`, `infrastructure_error`. |
+
+- `source_type`: `RPGLE`, `SQLRPGLE` or `CLLE`; otherwise taken from the file extension (`.rpgle`, `.sqlrpgle`, `.clle`).
+- Copy members: every `/copy <file>,<member>` in the source is written to `QTEMP/<FILE>` as member `<member>`, so `/copy src,X` goes to `QTEMP/SRC` and `/copy qrpglesrc,X` to `QTEMP/QRPGLESRC`. The member file is taken from the folder of the source file: the one file whose name without extension is `<member>`. `copy_members` (separated by `;`) can name extra files explicitly, they are matched by member name. A member that is neither given nor found is an error. `QTEMP` is put first in the library list. Every compile adds `QDEVTOOLS` (it holds the RPG message file `QRPGLEMSG`). Libraries with the tables of the source are passed in `libraries` (comma-separated) and added at the end. Copy members are written as a stream file under `/tmp/mcp400` and copied into their member with `CPYFRMSTMF`; the stream file is deleted afterwards. Other `/copy` files (e.g. `yajl/qrpglesrc,yajl_h`) are not touched and are looked up in the library list (warning).
+- The temporary source file is always `QTEMP/TMPSRC`; the member gets the file name. Objects created by the compile stay in `QTEMP` and are deleted again by `compile_check`.
+- The file name is the member name: max. 10 characters, valid IBM i name.
+- Limits: 512 KB, 9999 lines, 100 characters per line. Nothing is truncated silently.
+- `compiler_options`: only `*XREF`, `*NOXREF`, `*SECLVL`, `*NOSECLVL`.
+- Any local file the server process can read can be prepared. The server does not restrict the path, so the agent can send any readable file to the IBM i.
+- Each compile uses its own IBM i connection and job. A `compile_id` expires after 30 minutes, at most 5 are open at a time.
+
+### Object search (`mcp400.jar`, `mcp400-pgm.jar`)
+
+| Tool | Description |
+|---|---|
+| `search_objects(library, [name], [object_type])` | Objects of one library by name pattern (`*` wildcard, max. 10 characters) and type (`*PGM`, `*SRVPGM`, `*FILE`, `*MODULE`, `*DTAARA`, `*DTAQ`, `*MSGF`, `*OUTQ`, `*BNDDIR`, default `*ALL`). One line per object: name, type, attribute, text. Max. 200 results. Read-only. |
+| `get_binding_directory_entries(library, directory)` | Entries (service programs, modules) of a binding directory. |
+| `search_procedures(pattern, [library], [binding_directory])` | Exported procedures of service programs by name (`*` wildcard, case sensitive). With `library` and `binding_directory`, only service programs bound by that directory are searched. |
+
+The catalog views behind the binding tools (`QSYS2.BINDING_DIRECTORY_INFO`, `QSYS2.PROGRAM_EXPORT_IMPORT_INFO`) are not verified on every IBM i release. If a call fails with an SQL error, the column names do not match the release.
 
 ## Tools
 

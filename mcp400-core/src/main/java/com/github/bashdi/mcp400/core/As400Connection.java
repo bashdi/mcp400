@@ -1,5 +1,7 @@
 package com.github.bashdi.mcp400.core;
 
+import com.ibm.as400.access.AS400;
+
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -43,6 +45,17 @@ public final class As400Connection {
             }
         }
         return false;
+    }
+
+    /** A jt400 system object for IFS access, with the same settings as openConnection. Caller disconnects it. */
+    public static AS400 system() {
+        String address = System.getenv("AS400_ADDRESS");
+        String username = System.getenv("AS400_USER");
+        String password = System.getenv("AS400_PASSWORD");
+        if (address == null || username == null || password == null) {
+            throw new IllegalStateException("AS400_ADDRESS, AS400_USER or AS400_PASSWORD missing!");
+        }
+        return new AS400(address, username, password);
     }
 
     /** Opens a connection from the AS400_ADDRESS, AS400_USER and AS400_PASSWORD environment variables. */
