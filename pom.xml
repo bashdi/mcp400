@@ -4,7 +4,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>com.github.bashdi</groupId>
 	<artifactId>mcp400-parent</artifactId>
-	<version>0.1</version>
+	<version>0.2</version>
 	<packaging>pom</packaging>
 	<name>mcp400-parent</name>
 	<description>mcp-servers for as400/ibmi/db2 for i</description>
