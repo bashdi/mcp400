@@ -4,6 +4,8 @@ import com.github.bashdi.mcp400.core.As400Connection;
 import com.ibm.as400.access.AS400;
 import com.ibm.as400.access.IFSFile;
 import com.ibm.as400.access.IFSFileOutputStream;
+import com.ibm.as400.access.JobLog;
+import com.ibm.as400.access.QueuedMessage;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -23,6 +25,7 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -106,7 +109,7 @@ public final class CompileService {
         List<String> libs = timings.run("Bibliotheken prüfen", () -> parseLibraries(libraries));
         Connection c = timings.run("Verbindung", As400Connection::openConnection);
         String job = jobName(c);
-        long baseline = joblogBaselineOrZero(c, job);
+        long baseline = joblogBaselineOrZero(job);
         List<String> added = List.of();
         try {
             added = timings.run("Bibliotheksliste", () -> addLibraries(c, libs));
@@ -138,7 +141,7 @@ public final class CompileService {
                 return null;
             });
         } catch (StepError e) {
-            String joblog = joblogSince(c, job, baseline);
+            String joblog = joblogSince(job, baseline);
             close(c);
             throw new IllegalStateException(e.getMessage() + "\n" + joblog);
         } catch (RuntimeException e) {
@@ -217,7 +220,7 @@ public final class CompileService {
 
         long baseline;
         try {
-            baseline = joblogBaseline(c, p.jobName());
+            baseline = joblogBaseline(p.jobName());
         } catch (SQLException e) {
             r.infrastructure = "joblog cannot be read (" + clean(e.getMessage()) + ")";
             return;
@@ -234,7 +237,7 @@ public final class CompileService {
         }
 
         try {
-            r.messages = readJoblog(c, p.jobName(), baseline);
+            r.messages = readJoblog(p.jobName(), baseline);
         } catch (SQLException e) {
             r.infrastructure = "joblog cannot be read (" + clean(e.getMessage()) + ")";
             return;
@@ -553,27 +556,22 @@ public final class CompileService {
         }
     }
 
-    private static long joblogBaseline(Connection c, String job) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement("SELECT COALESCE(MAX(ORDINAL_POSITION), 0) FROM TABLE(QSYS2.JOBLOG_INFO(?)) X")) {
-            ps.setString(1, job);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? rs.getLong(1) : 0;
-            }
-        }
+    private static long joblogBaseline(String job) throws SQLException {
+        return joblogMessages(job).size();
     }
 
-    private static long joblogBaselineOrZero(Connection c, String job) {
+    private static long joblogBaselineOrZero(String job) {
         try {
-            return joblogBaseline(c, job);
+            return joblogBaseline(job);
         } catch (SQLException e) {
             return 0;
         }
     }
 
     /** The last joblog messages since the baseline, for a failed step: the IBM i message behind a generic CPF0006. */
-    private static String joblogSince(Connection c, String job, long baseline) {
+    private static String joblogSince(String job, long baseline) {
         try {
-            List<Message> messages = readJoblog(c, job, baseline);
+            List<Message> messages = readJoblog(job, baseline);
             if (messages.isEmpty()) return "joblog: keine Meldungen";
             List<String> lines = new ArrayList<>(List.of("joblog (letzte Meldungen):"));
             for (Message m : messages.subList(Math.max(0, messages.size() - 8), messages.size())) {
@@ -585,19 +583,39 @@ public final class CompileService {
         }
     }
 
-    private static List<Message> readJoblog(Connection c, String job, long baseline) throws SQLException {
+    private static List<Message> readJoblog(String job, long baseline) throws SQLException {
         List<Message> messages = new ArrayList<>();
-        try (PreparedStatement ps = c.prepareStatement("SELECT ORDINAL_POSITION, MESSAGE_ID, SEVERITY, MESSAGE_TEXT, MESSAGE_SECOND_LEVEL_TEXT " +
-                "FROM TABLE(QSYS2.JOBLOG_INFO(?)) X WHERE ORDINAL_POSITION > ? ORDER BY ORDINAL_POSITION")) {
-            ps.setString(1, job);
-            ps.setLong(2, baseline);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    messages.add(new Message(rs.getLong(1), rs.getString(2), rs.getInt(3), clean(rs.getString(4)), clean(rs.getString(5))));
-                }
-            }
+        for (Message m : joblogMessages(job)) {
+            if (m.ordinal() > baseline) messages.add(m);
         }
         return messages;
+    }
+
+    /**
+     * All messages of the job log, read with JTOpen (not SQL). The ordinal is the 1-based position in the log.
+     * The job name is the one from QSYS2.JOB_NAME: "number/user/job".
+     */
+    private static List<Message> joblogMessages(String job) throws SQLException {
+        String[] parts = job == null ? new String[0] : job.split("/");
+        if (parts.length != 3) throw new SQLException("Jobname unbekannt: " + job);
+        AS400 system = As400Connection.system();
+        try {
+            JobLog log = new JobLog(system, parts[2], parts[1], parts[0]);
+            log.load();
+            List<Message> messages = new ArrayList<>();
+            Enumeration<QueuedMessage> entries = log.getMessages();
+            long ordinal = 0;
+            while (entries.hasMoreElements()) {
+                QueuedMessage m = entries.nextElement();
+                ordinal++;
+                messages.add(new Message(ordinal, m.getID(), m.getSeverity(), clean(m.getText()), clean(m.getHelp())));
+            }
+            return messages;
+        } catch (Exception e) {
+            throw new SQLException("Joblog (JTOpen): " + clean(e.getMessage()), e);
+        } finally {
+            system.disconnectAllServices();
+        }
     }
 
     private static List<String> objectsNamed(Connection c, String member) throws SQLException {
