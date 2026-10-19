@@ -4,6 +4,13 @@ import com.github.bashdi.mcp400.core.As400Connection;
 import com.ibm.as400.access.AS400;
 import com.ibm.as400.access.IFSFile;
 import com.ibm.as400.access.IFSFileOutputStream;
+import com.ibm.as400.access.Job;
+import com.ibm.as400.access.JobLog;
+import com.ibm.as400.access.PrintObjectInputStream;
+import com.ibm.as400.access.QSYSObjectPathName;
+import com.ibm.as400.access.QueuedMessage;
+import com.ibm.as400.access.SpooledFile;
+import com.ibm.as400.access.SpooledFileList;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -13,13 +20,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.sql.CallableStatement;
-import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -47,13 +52,12 @@ public final class CompileService {
     /** Temporary source file in QTEMP, the same name for every source type. */
     private static final String SOURCE_FILE = "TMPSRC";
     private static final Duration TTL = Duration.ofMinutes(30);
-    /** Spool files created this long before compile_check started still count, for clock differences. */
-    private static final Duration SPOOL_MARGIN = Duration.ofMinutes(5);
     private static final int MAX_OPEN = 5;
     private static final int MAX_COPY_MEMBERS = 50;
     private static final int MAX_LIBRARIES = 20;
     private static final int MAX_DIAGNOSTICS = 50;
     private static final int MAX_SPOOL_HINTS = 30;
+    private static final int MAX_SPOOL_BYTES = 500_000;
     private static final int ROWS_PER_INSERT = 100;
     /** Added to the library list for every compile: QDEVTOOLS holds the compiler message file QRPGLEMSG. */
     private static final List<String> COMPILER_LIBRARIES = List.of("QDEVTOOLS");
@@ -106,7 +110,7 @@ public final class CompileService {
         List<String> libs = timings.run("Bibliotheken prüfen", () -> parseLibraries(libraries));
         Connection c = timings.run("Verbindung", As400Connection::openConnection);
         String job = jobName(c);
-        long baseline = joblogBaselineOrZero(c, job);
+        long baseline = joblogBaselineOrZero(job);
         List<String> added = List.of();
         try {
             added = timings.run("Bibliotheksliste", () -> addLibraries(c, libs));
@@ -138,7 +142,7 @@ public final class CompileService {
                 return null;
             });
         } catch (StepError e) {
-            String joblog = joblogSince(c, job, baseline);
+            String joblog = joblogSince(job, baseline);
             close(c);
             throw new IllegalStateException(e.getMessage() + "\n" + joblog);
         } catch (RuntimeException e) {
@@ -207,18 +211,10 @@ public final class CompileService {
             return;
         }
 
-        Timestamp since;
-        try {
-            since = serverNow(c);
-        } catch (SQLException e) {
-            r.infrastructure = "connection to the IBM i is gone (" + clean(e.getMessage()) + ")";
-            return;
-        }
-
         long baseline;
         try {
-            baseline = joblogBaseline(c, p.jobName());
-        } catch (SQLException e) {
+            baseline = joblogBaseline(p.jobName());
+        } catch (IllegalStateException e) {
             r.infrastructure = "joblog cannot be read (" + clean(e.getMessage()) + ")";
             return;
         }
@@ -234,8 +230,8 @@ public final class CompileService {
         }
 
         try {
-            r.messages = readJoblog(c, p.jobName(), baseline);
-        } catch (SQLException e) {
+            r.messages = readJoblog(p.jobName(), baseline);
+        } catch (IllegalStateException e) {
             r.infrastructure = "joblog cannot be read (" + clean(e.getMessage()) + ")";
             return;
         }
@@ -247,8 +243,8 @@ public final class CompileService {
         }
 
         try {
-            r.spool = readSpool(c, p.jobName(), since);
-        } catch (SQLException | IllegalStateException e) {
+            r.spool = readSpool(p.jobName());
+        } catch (IllegalStateException e) {
             r.spoolError = clean(e.getMessage());
         }
     }
@@ -553,49 +549,72 @@ public final class CompileService {
         }
     }
 
-    private static long joblogBaseline(Connection c, String job) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement("SELECT COALESCE(MAX(ORDINAL_POSITION), 0) FROM TABLE(QSYS2.JOBLOG_INFO(?)) X")) {
-            ps.setString(1, job);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? rs.getLong(1) : 0;
-            }
+    /**
+     * The JTOpen job for a qualified name "number/user/job" as JDBC reports it. The one-argument Job constructor
+     * takes an internal job ID instead, so the parts are passed separately.
+     */
+    private static Job jtopenJob(AS400 system, String qualifiedName) {
+        String[] parts = qualifiedName.split("/");
+        if (parts.length != 3) throw new IllegalStateException("Jobname nicht qualifiziert: " + qualifiedName);
+        return new Job(system, parts[2], parts[1], parts[0]);
+    }
+
+    /** The joblog of the job, oldest message first, read through JTOpen. */
+    private static QueuedMessage[] joblogMessages(String job) {
+        AS400 system = As400Connection.system();
+        try {
+            JobLog log = jtopenJob(system, job).getJobLog();
+            log.load();
+            QueuedMessage[] all = log.getMessages(-1, 0);
+            return all == null ? new QueuedMessage[0] : all;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("joblog nicht lesbar: unterbrochen", e);
+        } catch (Exception e) {
+            throw new IllegalStateException("joblog nicht lesbar: " + clean(e.getMessage()), e);
+        } finally {
+            system.disconnectAllServices();
         }
     }
 
-    private static long joblogBaselineOrZero(Connection c, String job) {
+    /** The number of joblog messages before the compile starts. */
+    private static long joblogBaseline(String job) {
+        return joblogMessages(job).length;
+    }
+
+    private static long joblogBaselineOrZero(String job) {
         try {
-            return joblogBaseline(c, job);
-        } catch (SQLException e) {
+            return joblogBaseline(job);
+        } catch (IllegalStateException e) {
             return 0;
         }
     }
 
     /** The last joblog messages since the baseline, for a failed step: the IBM i message behind a generic CPF0006. */
-    private static String joblogSince(Connection c, String job, long baseline) {
+    private static String joblogSince(String job, long baseline) {
         try {
-            List<Message> messages = readJoblog(c, job, baseline);
+            List<Message> messages = readJoblog(job, baseline);
             if (messages.isEmpty()) return "joblog: keine Meldungen";
             List<String> lines = new ArrayList<>(List.of("joblog (letzte Meldungen):"));
             for (Message m : messages.subList(Math.max(0, messages.size() - 8), messages.size())) {
                 lines.add("  " + (m.id() == null ? "-" : m.id()) + " " + m.text());
+                if (m.severity() >= 40 && m.secondLevel() != null && !m.secondLevel().isBlank()) {
+                    lines.add("     " + m.secondLevel().strip().replaceAll("\\s+", " ").substring(0, Math.min(300, m.secondLevel().strip().length())));
+                }
             }
             return String.join("\n", lines);
-        } catch (SQLException e) {
+        } catch (IllegalStateException e) {
             return "joblog: nicht lesbar (" + clean(e.getMessage()) + ")";
         }
     }
 
-    private static List<Message> readJoblog(Connection c, String job, long baseline) throws SQLException {
+    /** The messages after the baseline. The ordinal is the 1-based position in the joblog, as the IBM i numbers it. */
+    private static List<Message> readJoblog(String job, long baseline) {
+        QueuedMessage[] all = joblogMessages(job);
         List<Message> messages = new ArrayList<>();
-        try (PreparedStatement ps = c.prepareStatement("SELECT ORDINAL_POSITION, MESSAGE_ID, SEVERITY, MESSAGE_TEXT, MESSAGE_SECOND_LEVEL_TEXT " +
-                "FROM TABLE(QSYS2.JOBLOG_INFO(?)) X WHERE ORDINAL_POSITION > ? ORDER BY ORDINAL_POSITION")) {
-            ps.setString(1, job);
-            ps.setLong(2, baseline);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    messages.add(new Message(rs.getLong(1), rs.getString(2), rs.getInt(3), clean(rs.getString(4)), clean(rs.getString(5))));
-                }
-            }
+        for (int i = (int) baseline; i < all.length; i++) {
+            QueuedMessage q = all[i];
+            messages.add(new Message(i + 1, q.getID(), q.getSeverity(), clean(q.getText()), clean(q.getHelp())));
         }
         return messages;
     }
@@ -614,56 +633,61 @@ public final class CompileService {
     private record Spool(String job, int number, List<String> hints, int lines) {
     }
 
-    /** The IBM i clock, so the time window does not depend on the time zone of this computer. */
-    private static Timestamp serverNow(Connection c) throws SQLException {
-        try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery("SELECT CURRENT TIMESTAMP FROM SYSIBM.SYSDUMMY1")) {
-            rs.next();
-            return rs.getTimestamp(1);
-        }
-    }
-
-    /** The output queue of the job, from its job attributes. */
-    private static String[] outputQueue(Connection c, String job) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement("SELECT OUTPUT_QUEUE_LIBRARY_NAME, OUTPUT_QUEUE_NAME FROM TABLE(QSYS2.JOB_INFO(?)) X")) {
-            ps.setString(1, job);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) throw new IllegalStateException("Ausgabewarteschlange des Jobs nicht gefunden");
-                return new String[]{rs.getString(1).trim(), rs.getString(2).trim()};
+    /**
+     * The newest QSYSPRT listing of this job, read through JTOpen. The job's output queue comes from the job itself,
+     * and the spool files are matched to the job by name, number and user.
+     */
+    private static Spool readSpool(String job) {
+        AS400 system = As400Connection.system();
+        try {
+            Job j = jtopenJob(system, job);
+            String queue = queueFilter(j.getOutputQueue());
+            SpooledFileList list = new SpooledFileList(system);
+            try {
+                list.setQueueFilter(queue);
+                list.openSynchronously();
+                SpooledFile newest = null;
+                for (SpooledFile sf : list.getObjectsList()) {
+                    if (!"QSYSPRT".equals(sf.getName()) || !j.getName().equals(sf.getJobName()) || !j.getNumber().equals(sf.getJobNumber())) continue;
+                    if (newest == null || sf.getNumber() > newest.getNumber()) newest = sf;
+                }
+                if (newest == null) throw new IllegalStateException("keine Spool-Datei QSYSPRT im Job");
+                return readListing(job, newest);
+            } finally {
+                list.close();
             }
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Spool nicht lesbar: unterbrochen", e);
+        } catch (Exception e) {
+            throw new IllegalStateException("Spool nicht lesbar: " + clean(e.getMessage()), e);
+        } finally {
+            system.disconnectAllServices();
         }
     }
 
     /**
-     * The newest listing (QSYSPRT) of this job created since the given time, from its output queue.
-     * Only lines that look like diagnostics are kept.
+     * The IFS path of the output queue, which SpooledFileList.setQueueFilter expects (/QSYS.LIB/LIB.LIB/NAME.OUTQ).
+     * JTOpen returns that path, or "LIB/NAME" for a queue given that way.
      */
-    private static Spool readSpool(Connection c, String job, Timestamp since) throws SQLException {
-        String[] queue = outputQueue(c, job);
-        String jobName;
-        int number;
-        try (PreparedStatement ps = c.prepareStatement("SELECT JOB_NAME, FILE_NUMBER FROM TABLE(QSYS2.OUTPUT_QUEUE_ENTRIES(?, ?)) AS o " +
-                "WHERE o.JOB_NAME = ? AND o.SPOOLED_FILE_NAME = 'QSYSPRT' AND o.CREATE_TIMESTAMP >= ? " +
-                "ORDER BY o.FILE_NUMBER DESC FETCH FIRST 1 ROWS ONLY")) {
-            ps.setString(1, queue[0]);
-            ps.setString(2, queue[1]);
-            ps.setString(3, job);
-            ps.setTimestamp(4, new Timestamp(since.getTime() - SPOOL_MARGIN.toMillis()));
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) throw new IllegalStateException("keine Spool-Datei QSYSPRT im Job seit Prüfbeginn");
-                jobName = rs.getString(1);
-                number = rs.getInt(2);
-            }
+    private static String queueFilter(String outputQueue) {
+        if (outputQueue != null && outputQueue.startsWith("/")) return outputQueue;
+        String[] parts = outputQueue == null ? new String[0] : outputQueue.split("/");
+        if (parts.length != 2) throw new IllegalStateException("Ausgabewarteschlange unbekannt: " + outputQueue);
+        return QSYSObjectPathName.toPath(parts[0], parts[1], "OUTQ");
+    }
+
+    /** The diagnostic lines of one listing. Only lines that look like diagnostics are kept. */
+    private static Spool readListing(String job, SpooledFile listing) throws Exception {
+        byte[] data;
+        try (PrintObjectInputStream in = listing.getInputStream()) {
+            data = in.readNBytes(MAX_SPOOL_BYTES);
         }
-        String content;
-        try (PreparedStatement ps = c.prepareStatement("SELECT SPOOLED_DATA FROM TABLE(SYSTOOLS.SPOOLED_FILE_DATA(?, 'QSYSPRT', ?)) X")) {
-            ps.setString(1, jobName);
-            ps.setInt(2, number);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) throw new IllegalStateException("Spool-Inhalt leer");
-                Clob clob = rs.getClob(1);
-                content = clob == null ? "" : clob.getSubString(1, (int) Math.min(clob.length(), 500_000));
-            }
-        }
+        String jobName = job;
+        int number = listing.getNumber();
+        String content = new String(data, StandardCharsets.ISO_8859_1);
         List<String> hints = new ArrayList<>();
         int lines = 0;
         for (String line : content.split("\\r?\\n")) {
