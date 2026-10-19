@@ -58,6 +58,8 @@ public final class CompileService {
     private static final int MAX_DIAGNOSTICS = 50;
     private static final int MAX_SPOOL_HINTS = 30;
     private static final int MAX_SPOOL_BYTES = 500_000;
+    private static final int MAX_JOBLOG_LINES = 20;
+    private static final int MAX_SECOND_LEVEL_CHARS = 400;
     private static final int ROWS_PER_INSERT = 100;
     /** Added to the library list for every compile: QDEVTOOLS holds the compiler message file QRPGLEMSG. */
     private static final List<String> COMPILER_LIBRARIES = List.of("QDEVTOOLS");
@@ -231,6 +233,8 @@ public final class CompileService {
 
         try {
             r.messages = readJoblog(p.jobName(), baseline);
+            long after = joblogBaseline(p.jobName());
+            r.joblogInfo = "job " + p.jobName() + ", messages before compile " + baseline + ", after compile " + after;
         } catch (IllegalStateException e) {
             r.infrastructure = "joblog cannot be read (" + clean(e.getMessage()) + ")";
             return;
@@ -521,7 +525,8 @@ public final class CompileService {
     /** Fixed command templates; the options are validated against ALLOWED_OPTIONS. */
     static String compileCommand(LocalSource src, String options) {
         String m = src.member();
-        String opt = options.isEmpty() ? "" : " OPTION(" + options + ")";
+        // OUTPUT(*PRINT) writes the compiler listing (QSYSPRT) to the job's output queue; the line-level diagnostics are only in there
+        String opt = (options.isEmpty() ? "" : " OPTION(" + options + ")") + " OUTPUT(*PRINT)";
         return switch (src.sourceType()) {
             case "RPGLE" -> "CRTRPGMOD MODULE(QTEMP/" + m + ") SRCFILE(QTEMP/" + SOURCE_FILE + ") SRCMBR(" + m + ")" + opt;
             case "SQLRPGLE" -> "CRTSQLRPGI OBJ(QTEMP/" + m + ") SRCFILE(QTEMP/" + SOURCE_FILE + ") SRCMBR(" + m + ") COMMIT(*NONE)" + opt;
@@ -647,11 +652,16 @@ public final class CompileService {
                 list.setQueueFilter(queue);
                 list.openSynchronously();
                 SpooledFile newest = null;
+                List<String> seen = new ArrayList<>();
                 for (SpooledFile sf : list.getObjectsList()) {
+                    if (seen.size() < 10) seen.add(sf.getName() + " von " + sf.getJobNumber() + "/" + sf.getJobUser() + "/" + sf.getJobName());
                     if (!"QSYSPRT".equals(sf.getName()) || !j.getName().equals(sf.getJobName()) || !j.getNumber().equals(sf.getJobNumber())) continue;
                     if (newest == null || sf.getNumber() > newest.getNumber()) newest = sf;
                 }
-                if (newest == null) throw new IllegalStateException("keine Spool-Datei QSYSPRT im Job");
+                if (newest == null) {
+                    throw new IllegalStateException("keine Spool-Datei QSYSPRT im Job " + job + " (Queue " + queue + ", "
+                            + list.getObjectsList().size() + " Spool-Dateien dort" + (seen.isEmpty() ? "" : ": " + String.join("; ", seen)) + ")");
+                }
                 return readListing(job, newest);
             } finally {
                 list.close();
@@ -809,6 +819,7 @@ public final class CompileService {
         String infrastructure;
         String commandError;
         List<Message> messages = List.of();
+        String joblogInfo;
         List<String> objects = List.of();
         String objectsError;
         Spool spool;
@@ -862,7 +873,15 @@ public final class CompileService {
                 out.add("... more diagnostics omitted");
             }
 
-            out.add("joblog: " + (infrastructure != null && messages.isEmpty() ? "unavailable" : messages.size() + " messages since compile start"));
+            out.add("joblog: " + (infrastructure != null && messages.isEmpty() ? "unavailable" : messages.size() + " messages since compile start")
+                    + (joblogInfo == null ? "" : " (" + joblogInfo + ")"));
+            for (Message m : messages.subList(0, Math.min(messages.size(), MAX_JOBLOG_LINES))) {
+                out.add("  " + (m.id() == null ? "-" : m.id()) + " severity " + m.severity() + ": " + m.text());
+                if (m.secondLevel() != null && !m.secondLevel().isBlank()) {
+                    String second = m.secondLevel().strip().replaceAll("\\s+", " ");
+                    out.add("     " + second.substring(0, Math.min(MAX_SECOND_LEVEL_CHARS, second.length())));
+                }
+            }
             if (spool != null) {
                 out.add("spool: QSYSPRT " + spool.number() + ", " + spool.lines() + " lines");
                 spool.hints().forEach(h -> out.add("  > " + h));
